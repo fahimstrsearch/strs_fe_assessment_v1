@@ -6,23 +6,21 @@ from pydantic import BaseModel, ConfigDict
 from app.schemas.underwriting import UnderwritingRead
 
 
-class MetricScore(BaseModel):
+class ScoreResult(BaseModel):
+    """Outcome of grading one attempt against the reference."""
+
+    # best | medium | low
+    rating: str
+    # 100 / 70 / 40, matching the rating.
+    accuracy: Decimal
     metric: str
     label: str
-    weight: Decimal
     candidate: Decimal | None
     reference: Decimal | None
-    # Relative deviation from the reference (absolute for percentage metrics).
-    deviation: Decimal | None
-    tolerance: Decimal
-    # Fraction of the weight earned, 0..1.
-    score: Decimal
-    points: Decimal
-
-
-class ScoreResult(BaseModel):
-    accuracy: Decimal
-    breakdown: list[MetricScore]
+    # |candidate - reference| / reference
+    deviation: Decimal
+    best_threshold: Decimal
+    medium_threshold: Decimal
 
 
 class SubmissionRead(BaseModel):
@@ -32,8 +30,10 @@ class SubmissionRead(BaseModel):
     underwriting_id: int
     reference_underwriting_id: int | None
     zpid: str
+    # best | medium | low
+    rating: str
     accuracy: Decimal
-    breakdown: list[MetricScore]
+    breakdown: ScoreResult
     submitted_at: datetime
 
 
@@ -51,11 +51,15 @@ class DashboardProperty(BaseModel):
     img_src: str | None
     detail_url: str | None
     home_type: str | None
+    market_id: int | None
+    market_name: str | None
     # not_started | in_progress | submitted
     status: str
     attempts: int
     latest_accuracy: Decimal | None
+    latest_rating: str | None
     best_accuracy: Decimal | None
+    best_rating: str | None
     # Draft to resume, if one exists.
     active_underwriting_id: int | None
     latest_submission_id: int | None

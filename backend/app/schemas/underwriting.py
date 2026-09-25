@@ -185,6 +185,7 @@ class UnderwritingRead(BaseModel):
 
     id: int
     zpid: str | None
+    market_id: int | None = None
     is_reference: bool
     deal_status: str | None
     deal_submitted: datetime | None

@@ -1,11 +1,21 @@
 """A graded trainee attempt.
 
 Created when a trainee submits an underwriting. Links the attempt to the
-reference underwriting it was scored against and keeps the per-metric
-breakdown so the dashboard can explain the accuracy number.
+reference underwriting it was scored against and keeps the score breakdown
+so the dashboard can explain the rating.
 """
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, Numeric, Text, func
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -36,9 +46,11 @@ class TrainingSubmission(Base):
         nullable=False,
     )
 
-    # 0-100, two decimals.
+    # best | medium | low
+    rating = Column(String(10), nullable=False)
+    # 100 / 70 / 40, matching the rating.
     accuracy = Column(Numeric(5, 2), nullable=False)
-    # [{metric, weight, candidate, reference, deviation, score}, ...]
+    # {rating, accuracy, candidate, reference, deviation, thresholds}
     breakdown = Column(JSONB, nullable=False)
     submitted_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -8,8 +8,12 @@ class PropertyRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def list(self, *, search: str | None = None) -> list[Property]:
+    async def list(
+        self, *, search: str | None = None, market_id: int | None = None
+    ) -> list[Property]:
         stmt = select(Property).where(Property.remove_listing.is_not(True))
+        if market_id is not None:
+            stmt = stmt.where(Property.market_id == market_id)
         if search:
             like = f"%{search}%"
             stmt = stmt.where(

@@ -9,17 +9,28 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, Text, text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
 if TYPE_CHECKING:
+    from app.models.market import Market
     from app.models.underwriting import Underwriting
 
 
 class Property(Base):
     __tablename__ = "properties"
+    __table_args__ = (Index("ix_properties_market_id", "market_id"),)
 
     zpid: Mapped[str] = mapped_column(Text, primary_key=True)
     img_src: Mapped[str | None] = mapped_column(Text)
@@ -57,6 +68,13 @@ class Property(Base):
     )
     passes_preset_filters: Mapped[bool | None] = mapped_column(Boolean)
 
+    market_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("markets.id", ondelete="SET NULL")
+    )
+
+    market: Mapped[Market | None] = relationship(
+        "Market", back_populates="properties", lazy="joined"
+    )
     underwritings: Mapped[list[Underwriting]] = relationship(
         "Underwriting", back_populates="listing"
     )

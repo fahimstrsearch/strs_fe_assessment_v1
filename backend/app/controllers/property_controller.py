@@ -9,9 +9,13 @@ class PropertyController:
     def __init__(self, service: PropertyService):
         self.service = service
 
-    async def list_properties(self, search: str | None) -> PropertyListResult:
+    async def list_properties(
+        self, search: str | None, market_id: int | None = None
+    ) -> PropertyListResult:
         try:
-            return await self.service.list(search=search)
+            return await self.service.list(search=search, market_id=market_id)
+        except LookupError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
         except Exception as e:
             logger.error("properties.list.error", error=str(e))
             raise HTTPException(

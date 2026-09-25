@@ -1,9 +1,9 @@
 """Underwriting tables.
 
 Mirrors ``iron_bank.underwritings`` / ``uw_details`` / ``uw_taxes`` from the
-main backend. Differences for the assessment: public schema, the foreign keys
-to ``markets`` and ``users`` are dropped (columns kept as plain integers), and
-an ``is_reference`` flag marks the analyst "answer key" a trainee is scored
+main backend. Differences for the assessment: public schema, the foreign key
+to ``users`` is dropped (columns kept as plain integers), and an
+``is_reference`` flag marks the analyst "answer key" a trainee is scored
 against.
 """
 
@@ -94,8 +94,14 @@ class Underwriting(Base):
         nullable=True,
     )
 
+    market_id = Column(
+        Integer,
+        ForeignKey("markets.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # Kept for parity with the main backend; no FK targets here.
-    market_id = Column(Integer, nullable=True)
     analyst_id = Column(Integer, nullable=True)
     approver_id = Column(Integer, nullable=True)
     owner_id = Column(Integer, nullable=True)
@@ -184,6 +190,7 @@ class Underwriting(Base):
     )
 
     listing = relationship("Property", back_populates="underwritings")
+    market = relationship("Market", back_populates="underwritings")
 
     detail = relationship(
         "UnderwritingDetail",

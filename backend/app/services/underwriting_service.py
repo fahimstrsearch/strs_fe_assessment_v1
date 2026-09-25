@@ -47,6 +47,7 @@ class UnderwritingService:
 
         underwriting = Underwriting(
             zpid=prop.zpid,
+            market_id=prop.market_id,
             is_reference=False,
             deal_status=STARTED_STATUS,
             source="training",

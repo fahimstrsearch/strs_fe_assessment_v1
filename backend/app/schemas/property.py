@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.market import MarketSummary
+
 
 class PropertyRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -25,6 +27,8 @@ class PropertyRead(BaseModel):
     home_status: str | None = None
     time_on_zillow: str | None = None
     flex_text: str | None = None
+    market_id: int | None = None
+    market: MarketSummary | None = None
     created_at: datetime | None = None
 
 

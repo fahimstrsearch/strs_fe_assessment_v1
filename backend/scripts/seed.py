@@ -1,18 +1,20 @@
-"""Seed training properties and their analyst reference underwritings.
+"""Seed markets, training properties and their analyst reference underwritings.
 
-Idempotent: re-running upserts the properties and replaces each reference
-underwriting. Trainee attempts and submissions are left untouched.
+Idempotent: re-running upserts the markets and properties and replaces each
+reference underwriting. Trainee attempts and submissions are left untouched.
 
     uv run python -m scripts.seed
+    uv run python -m scripts.seed --reset   # wipe every seeded row first
 """
 
 import asyncio
+import sys
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from app.core.database import AsyncSessionLocal
-from app.models import Property, Underwriting
+from app.models import Market, Property, Underwriting
 from app.repositories.property_repository import PropertyRepository
 from app.repositories.underwriting_repository import UnderwritingRepository
 from app.schemas.underwriting import (
@@ -79,10 +81,59 @@ def _comps(*rows: tuple[str, str, int, int]):
     ]
 
 
+# Each property below references one of these by slug.
+MARKETS: list[dict] = [
+    dict(
+        slug="smoky-blue-ridge-mountains",
+        name="Smoky & Blue Ridge Mountains",
+        state=None,
+        region="Southern Appalachia",
+        timezone="America/New_York",
+        description=(
+            "Drive-to cabin market spanning the Tennessee Smokies and the north "
+            "Georgia mountains. Year-round demand; views and hot tubs carry ADR."
+        ),
+    ),
+    dict(
+        slug="broken-bow",
+        name="Broken Bow",
+        state="OK",
+        region="Ouachita Mountains",
+        timezone="America/Chicago",
+        description=(
+            "Hochatown / Broken Bow luxury cabin market fed by DFW and OKC. "
+            "New-build heavy, light regulation, weekend-weighted occupancy."
+        ),
+    ),
+    dict(
+        slug="central-florida",
+        name="Central Florida",
+        state="FL",
+        region="Orlando Metro",
+        timezone="America/New_York",
+        description=(
+            "Theme-park resort communities around Kissimmee and Davenport. Large "
+            "themed homes, HOA-governed, cohost-friendly, steady year-round."
+        ),
+    ),
+    dict(
+        slug="texas-gulf-coast",
+        name="Texas Gulf Coast",
+        state="TX",
+        region="Coastal Bend",
+        timezone="America/Chicago",
+        description=(
+            "Port Aransas and Mustang Island beach market. Heavy summer "
+            "seasonality and windstorm insurance, offset by top-decile peak ADR."
+        ),
+    ),
+]
+
 SEED: list[tuple[dict, SaveUnderwritingPayload]] = [
     (
         dict(
             zpid="41234567",
+            market="smoky-blue-ridge-mountains",
             address="1240 Ski View Dr, Gatlinburg, TN 37738",
             address_street="1240 Ski View Dr",
             address_city="Gatlinburg",
@@ -142,6 +193,7 @@ SEED: list[tuple[dict, SaveUnderwritingPayload]] = [
     (
         dict(
             zpid="52345678",
+            market="broken-bow",
             address="88 Lakeshore Ln, Broken Bow, OK 74728",
             address_street="88 Lakeshore Ln",
             address_city="Broken Bow",
@@ -194,6 +246,7 @@ SEED: list[tuple[dict, SaveUnderwritingPayload]] = [
     (
         dict(
             zpid="63456789",
+            market="central-florida",
             address="3402 Palm Isle Ct, Kissimmee, FL 34747",
             address_street="3402 Palm Isle Ct",
             address_city="Kissimmee",
@@ -256,6 +309,7 @@ SEED: list[tuple[dict, SaveUnderwritingPayload]] = [
     (
         dict(
             zpid="74567890",
+            market="smoky-blue-ridge-mountains",
             address="215 Aspen Ridge Rd, Blue Ridge, GA 30513",
             address_street="215 Aspen Ridge Rd",
             address_city="Blue Ridge",
@@ -310,6 +364,7 @@ SEED: list[tuple[dict, SaveUnderwritingPayload]] = [
     (
         dict(
             zpid="85678901",
+            market="texas-gulf-coast",
             address="9 Dune Walk, Port Aransas, TX 78373",
             address_street="9 Dune Walk",
             address_city="Port Aransas",
@@ -371,6 +426,7 @@ SEED: list[tuple[dict, SaveUnderwritingPayload]] = [
     (
         dict(
             zpid="96789012",
+            market="smoky-blue-ridge-mountains",
             address="47 Cedar Hollow Rd, Sevierville, TN 37876",
             address_street="47 Cedar Hollow Rd",
             address_city="Sevierville",
@@ -427,13 +483,54 @@ SEED: list[tuple[dict, SaveUnderwritingPayload]] = [
 ]
 
 
-async def seed() -> None:
+async def _wipe(db) -> None:
+    """Drop every seeded row, including trainee work, so seeding starts clean.
+
+    TRUNCATE rather than DELETE so ids restart at 1 on every reset and the
+    seeded markets keep stable, quotable ids.
+    """
+    await db.execute(
+        text(
+            "TRUNCATE TABLE training_submissions, underwritings, properties, "
+            "markets RESTART IDENTITY CASCADE"
+        )
+    )
+    await db.commit()
+    print("wiped submissions, underwritings, properties and markets")
+
+
+async def _seed_markets(db) -> dict[str, Market]:
+    by_slug: dict[str, Market] = {}
+    for data in MARKETS:
+        market = await db.scalar(select(Market).where(Market.slug == data["slug"]))
+        if market is None:
+            market = Market(**data)
+            db.add(market)
+        else:
+            for k, v in data.items():
+                setattr(market, k, v)
+        by_slug[data["slug"]] = market
+    await db.flush()
+    print(f"seeded {len(by_slug)} markets: {', '.join(sorted(by_slug))}")
+    return by_slug
+
+
+async def seed(*, reset: bool = False) -> None:
     async with AsyncSessionLocal() as db:
+        if reset:
+            await _wipe(db)
+
+        markets = await _seed_markets(db)
+
         prop_repo = PropertyRepository(db)
         uw_repo = UnderwritingRepository(db)
         service = UnderwritingService(uw_repo, prop_repo)
 
         for prop_data, reference_payload in SEED:
+            prop_data = dict(prop_data)
+            market = markets[prop_data.pop("market")]
+            prop_data["market_id"] = market.id
+
             prop = await db.get(Property, prop_data["zpid"])
             if prop is None:
                 prop = Property(**prop_data)
@@ -459,11 +556,15 @@ async def seed() -> None:
             service._apply_payload(row, reference_payload)
             service._recalculate(row)
             row.is_reference = True
+            row.market_id = market.id
             row.deal_status = "training_deal"
             row.source = "reference"
             await db.commit()
-            print(f"seeded {prop.zpid} {prop.address} -> reference uw #{row.id}")
+            print(
+                f"seeded {prop.zpid} {prop.address} "
+                f"[{market.name}] -> reference uw #{row.id}"
+            )
 
 
 if __name__ == "__main__":
-    asyncio.run(seed())
+    asyncio.run(seed(reset="--reset" in sys.argv))

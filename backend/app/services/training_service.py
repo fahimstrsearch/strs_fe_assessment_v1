@@ -40,12 +40,13 @@ class TrainingService:
         drafts = await self.underwriting_repository.list_trainee_underwritings()
 
         latest: dict[str, TrainingSubmission] = {}
-        best: dict[str, Decimal] = {}
+        best: dict[str, TrainingSubmission] = {}
         attempts: dict[str, int] = {}
         for s in submissions:  # newest first
             attempts[s.zpid] = attempts.get(s.zpid, 0) + 1
             latest.setdefault(s.zpid, s)
-            best[s.zpid] = max(best.get(s.zpid, Decimal("0")), s.accuracy)
+            if s.zpid not in best or s.accuracy > best[s.zpid].accuracy:
+                best[s.zpid] = s
 
         active_draft: dict[str, int] = {}
         for uw in drafts:  # newest first
@@ -75,12 +76,16 @@ class TrainingService:
                     img_src=p.img_src,
                     detail_url=p.detail_url,
                     home_type=p.home_type,
+                    market_id=p.market_id,
+                    market_name=p.market.name if p.market else None,
                     status=status,
                     attempts=attempts.get(p.zpid, 0),
                     latest_accuracy=latest[p.zpid].accuracy
                     if p.zpid in latest
                     else None,
-                    best_accuracy=best.get(p.zpid),
+                    latest_rating=latest[p.zpid].rating if p.zpid in latest else None,
+                    best_accuracy=best[p.zpid].accuracy if p.zpid in best else None,
+                    best_rating=best[p.zpid].rating if p.zpid in best else None,
                     active_underwriting_id=active_draft.get(p.zpid),
                     latest_submission_id=latest[p.zpid].id
                     if p.zpid in latest
@@ -122,8 +127,9 @@ class TrainingService:
             underwriting_id=underwriting.id,
             reference_underwriting_id=reference.id,
             zpid=underwriting.zpid,
+            rating=result.rating,
             accuracy=result.accuracy,
-            breakdown=[m.model_dump(mode="json") for m in result.breakdown],
+            breakdown=result.model_dump(mode="json"),
         )
         await self.training_repository.create(submission)
         underwriting.deal_score = max(1, min(100, int(round(result.accuracy))))
@@ -134,6 +140,7 @@ class TrainingService:
             "training.submitted",
             underwriting_id=underwriting.id,
             zpid=underwriting.zpid,
+            rating=result.rating,
             accuracy=str(result.accuracy),
         )
         return SubmitUnderwritingResult(

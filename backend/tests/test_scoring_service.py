@@ -1,54 +1,65 @@
 from decimal import Decimal
 
-from app.services.scoring_service import MetricRule, ScoringService, score_metric
+from app.services.scoring_service import (
+    BEST_THRESHOLD,
+    MEDIUM_THRESHOLD,
+    ScoringService,
+    deviation_from,
+    grade,
+)
 
-REFERENCE = {
-    "purchase_price": Decimal("500000"),
-    "mid_gross_revenue": Decimal("120000"),
-    "operating_expense_total": Decimal("2500"),
-    "optimization_total": Decimal("60000"),
-    "total_oop": Decimal("175000"),
-    "m_cash_on_cash": Decimal("0.1500"),
-}
-
-
-def test_identical_submission_scores_100():
-    result = ScoringService().score(REFERENCE, REFERENCE)
-    assert result.accuracy == Decimal("100.00")
-    assert all(m.score == Decimal("1") for m in result.breakdown)
+REFERENCE = {"mid_gross_revenue": Decimal("120000")}
 
 
-def test_missing_metric_earns_zero_for_that_metric():
-    candidate = {**REFERENCE, "m_cash_on_cash": None}
-    result = ScoringService().score(candidate, REFERENCE)
-    coc = next(m for m in result.breakdown if m.metric == "m_cash_on_cash")
-    assert coc.points == Decimal("0")
-    assert result.accuracy == Decimal("80.00")
+def _rate(candidate: str | None) -> tuple[str, Decimal]:
+    value = None if candidate is None else Decimal(candidate)
+    result = ScoringService().score({"mid_gross_revenue": value}, REFERENCE)
+    return result.rating, result.accuracy
 
 
-def test_within_tolerance_is_full_credit():
-    rule = MetricRule("x", "x", Decimal("10"), Decimal("0.10"))
-    assert score_metric(rule, Decimal("109"), Decimal("100")).points == Decimal("10")
+def test_exact_match_is_best():
+    assert _rate("120000") == ("best", Decimal("100.00"))
 
 
-def test_linear_decay_to_zero_at_three_times_tolerance():
-    rule = MetricRule("x", "x", Decimal("10"), Decimal("0.10"))
-    # 20% off: halfway through the decay band -> half credit.
-    assert score_metric(rule, Decimal("120"), Decimal("100")).points == Decimal("5.00")
-    # 30% off or worse -> zero.
-    assert score_metric(rule, Decimal("130"), Decimal("100")).points == Decimal("0")
-    assert score_metric(rule, Decimal("400"), Decimal("100")).points == Decimal("0")
+def test_within_ten_percent_is_best():
+    # 108k and 132k are exactly 10% either side of 120k.
+    assert _rate("108000") == ("best", Decimal("100.00"))
+    assert _rate("132000") == ("best", Decimal("100.00"))
+    assert _rate("115000") == ("best", Decimal("100.00"))
 
 
-def test_absolute_tolerance_for_percentages():
-    rule = MetricRule("coc", "coc", Decimal("20"), Decimal("0.03"), relative=False)
-    assert score_metric(rule, Decimal("0.12"), Decimal("0.15")).points == Decimal("20")
-    assert score_metric(rule, Decimal("0.09"), Decimal("0.15")).points == Decimal(
-        "10.00"
-    )
+def test_between_ten_and_twenty_five_percent_is_medium():
+    # 10.01% off tips it out of best; 25% is still medium.
+    assert _rate("107900") == ("medium", Decimal("70.00"))
+    assert _rate("90000") == ("medium", Decimal("70.00"))
+    assert _rate("150000") == ("medium", Decimal("70.00"))
+
+
+def test_beyond_twenty_five_percent_is_low():
+    assert _rate("89000") == ("low", Decimal("40.00"))
+    assert _rate("200000") == ("low", Decimal("40.00"))
+    assert _rate("0") == ("low", Decimal("40.00"))
+
+
+def test_missing_forecast_is_low():
+    assert _rate(None) == ("low", Decimal("40.00"))
 
 
 def test_zero_reference_does_not_divide_by_zero():
-    rule = MetricRule("x", "x", Decimal("10"), Decimal("0.10"))
-    assert score_metric(rule, Decimal("0"), Decimal("0")).points == Decimal("10")
-    assert score_metric(rule, Decimal("5"), Decimal("0")).points == Decimal("0")
+    assert deviation_from(Decimal("0"), Decimal("0")) == Decimal("0")
+    assert deviation_from(Decimal("5"), Decimal("0")) == Decimal("1")
+
+
+def test_grade_boundaries_are_inclusive():
+    assert grade(BEST_THRESHOLD)[0] == "best"
+    assert grade(MEDIUM_THRESHOLD)[0] == "medium"
+
+
+def test_result_explains_the_decision():
+    result = ScoringService().score({"mid_gross_revenue": Decimal("150000")}, REFERENCE)
+    assert result.metric == "mid_gross_revenue"
+    assert result.candidate == Decimal("150000")
+    assert result.reference == Decimal("120000")
+    assert result.deviation == Decimal("0.2500")
+    assert result.best_threshold == Decimal("0.10")
+    assert result.medium_threshold == Decimal("0.25")

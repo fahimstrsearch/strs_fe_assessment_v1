@@ -23,6 +23,7 @@ backend/
 │   ├── routes.py            # all HTTP routes; wires controller → service → repository
 │   ├── core/                # config (env), database (engine/session/Base), logger
 │   ├── models/              # SQLAlchemy models
+│   │   ├── market.py        # markets (groups properties + their underwritings)
 │   │   ├── property.py      # properties (mirrors zillow.scheduled_listings)
 │   │   ├── underwriting.py  # underwritings, uw_details, uw_taxes (mirrors iron_bank)
 │   │   ├── line_items.py    # uw_optimization_items, uw_operating_expenses, uw_comp_sets
@@ -34,10 +35,11 @@ backend/
 │   │   ├── scoring_service.py          # accuracy grading against the reference
 │   │   ├── underwriting_service.py     # start / save / submit
 │   │   ├── training_service.py         # dashboard + grading orchestration
-│   │   └── property_service.py
+│   │   ├── property_service.py
+│   │   └── market_service.py
 │   └── controllers/         # HTTP concerns: map errors to status codes
 ├── migrations/              # Alembic (async env); versions/0001_initial_schema.py
-├── scripts/seed.py          # sample properties + reference underwritings
+├── scripts/seed.py          # markets, sample properties + reference underwritings
 └── tests/                   # pytest (calculator + scoring, no DB needed)
 ```
 
@@ -51,7 +53,7 @@ cp .env.example .env            # DATABASE_URL points at the compose DB on port 
 docker compose up -d            # Postgres 16
 uv sync                         # install deps into .venv
 uv run alembic upgrade head     # create tables
-uv run python -m scripts.seed   # 6 properties + their reference underwritings
+uv run python -m scripts.seed   # 4 markets, 6 properties + their reference underwritings
 uv run uvicorn main:app --reload --port 8000
 ```
 
@@ -76,7 +78,9 @@ uv run alembic upgrade head
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/dashboard` | Properties with `status` (`not_started` / `in_progress` / `submitted`), `attempts`, `latest_accuracy`, `best_accuracy`, `active_underwriting_id`, plus a summary block |
-| GET | `/api/properties` | Plain property list (`?search=` on address/city/state) |
+| GET | `/api/markets` | All markets with a live `property_count` (`?is_active=` to filter) |
+| GET | `/api/markets/{id}` | One market |
+| GET | `/api/properties` | Plain property list (`?search=` on address/city/state, `?market_id=` to filter by market) |
 | GET | `/api/properties/{zpid}` | One property |
 | POST | `/api/underwritings` | `{ "zpid": "..." }` → creates a draft prefilled from the property (201) |
 | GET | `/api/underwritings/{id}` | Draft, with detail, taxes, line items and derived numbers |
@@ -84,6 +88,10 @@ uv run alembic upgrade head
 | POST | `/api/underwritings/{id}/submit` | Optional body = same shape as PUT. Finalises, grades, returns `{ submission, underwriting, dashboard }` |
 | GET | `/api/submissions?zpid=` | Attempt history |
 | GET | `/api/submissions/{id}` | One graded attempt |
+
+Errors come back as `{"detail": "..."}` and every route documents the codes it can
+raise (404 / 403 / 500), so a client generated from `openapi.json` sees them. The
+`422` on write routes is FastAPI's own request-validation error.
 
 ### Save / submit payload
 
@@ -114,22 +122,39 @@ Percentages are fractions (`0.20` = 20%). Submit requires `purchase_details`, `f
 
 ## Scoring
 
-Each property has one **reference** underwriting (`underwritings.is_reference = true`, seeded). A submission is compared to it on six derived metrics. A value within tolerance earns full points; credit decays linearly to zero at three times the tolerance.
+Each property has one **reference** underwriting (`underwritings.is_reference = true`, seeded). Grading looks at a single number: the trainee's **mid-scenario forecasted revenue** (`mid_gross_revenue`) against the analyst's.
 
-| Metric | Points | Tolerance |
-|---|---|---|
-| `purchase_price` | 15 | ±5% |
-| `mid_gross_revenue` | 25 | ±15% |
-| `operating_expense_total` (monthly) | 15 | ±20% |
-| `optimization_total` | 10 | ±25% |
-| `total_oop` | 15 | ±15% |
-| `m_cash_on_cash` | 20 | ±3 percentage points (absolute) |
+```
+deviation = |candidate - reference| / reference
 
-`accuracy` is the total out of 100 and is stored on `training_submissions` alongside the full `breakdown` (candidate value, reference value, deviation, points per metric). Rules live in `app/services/scoring_service.py`.
+deviation <= 0.10  ->  best    ->  100
+deviation <= 0.25  ->  medium  ->   70
+otherwise          ->  low     ->   40
+```
+
+| Band | Trainee forecast is | Rating | Accuracy |
+|---|---|---|---|
+| Best | within ±10% of the reference | `best` | 100 |
+| Medium | within ±25% | `medium` | 70 |
+| Low | further out, or missing | `low` | 40 |
+
+Both thresholds are inclusive. A missing forecast, or any guess against a zero reference, lands in `low` rather than raising.
+
+Worked example — reference forecast $125,000, so best is $112,500–$137,500 and medium is $93,750–$156,250:
+
+| Candidate | Deviation | Rating | Accuracy |
+|---|---|---|---|
+| $130,000 | 0.0400 | best | 100.00 |
+| $150,000 | 0.2000 | medium | 70.00 |
+| $200,000 | 0.6000 | low | 40.00 |
+
+`rating` and `accuracy` are both stored on `training_submissions`, with the full `breakdown` (candidate, reference, deviation, both thresholds) as JSONB so the UI can explain the grade. The dashboard exposes `latest_rating` / `best_rating` next to the accuracies. Thresholds and band scores are module constants at the top of `app/services/scoring_service.py`.
 
 ## Data model notes
 
-- `properties` mirrors the main backend's `zillow.scheduled_listings` (preset FK dropped).
-- `underwritings` and its children mirror `iron_bank.*`. FKs to `markets`/`users` are dropped (columns kept as plain ints), `is_reference` added, and a partial unique index guarantees one reference per `zpid`.
+- `markets` groups properties that share one investment thesis. Both `properties.market_id` and `underwritings.market_id` are nullable FKs with `ON DELETE SET NULL`, so retiring a market never deletes deal history. A new underwriting inherits its market from the property it starts from.
+- `properties` mirrors the main backend's `zillow.scheduled_listings` (preset FK dropped), plus `market_id`.
+- `underwritings` and its children mirror `iron_bank.*`. The FK to `users` is dropped (columns kept as plain ints), `is_reference` added, and a partial unique index guarantees one reference per `zpid`.
 - Reference underwritings are read-only through the API (403 on PUT).
-- Re-running `scripts/seed.py` refreshes properties and references without touching candidate attempts.
+- Re-running `scripts/seed.py` refreshes markets, properties and references without touching candidate attempts. `--reset` truncates every table (ids restart at 1, so the seeded markets are always 1-4) and reseeds from scratch.
+- The schema is kept as a single Alembic revision (`0001`); schema changes regenerate it rather than stacking migrations.
