@@ -47,10 +47,31 @@ Request flow: `routes.py` → `controllers/` → `services/` → `repositories/`
 
 ## Run it
 
+Only Docker is required:
+
+```bash
+cd backend
+docker compose up -d --build    # Postgres + API; first start migrates and seeds
+```
+
+The API is on http://localhost:8000. The first start runs the migrations and seeds
+the database; later starts skip the seed so attempts survive a restart.
+
+```bash
+docker compose exec api python -m scripts.seed --reset   # wipe attempts and reseed
+docker compose logs -f api                               # follow the API logs
+docker compose down                                      # stop, keep data (-v deletes it)
+API_PORT=8001 DB_PORT=5435 docker compose up -d          # if 8000 or 5434 is taken
+```
+
+### Developing the backend
+
+To run the API on the host with hot reload, start only the database:
+
 ```bash
 cd backend
 cp .env.example .env            # DATABASE_URL points at the compose DB on port 5434
-docker compose up -d            # Postgres 16
+docker compose up -d db         # Postgres 16 only
 uv sync                         # install deps into .venv
 uv run alembic upgrade head     # create tables
 uv run python -m scripts.seed   # 4 markets, 6 properties + their reference underwritings
@@ -156,5 +177,5 @@ Worked example — reference forecast $125,000, so best is $112,500–$137,500 a
 - `properties` mirrors the main backend's `zillow.scheduled_listings` (preset FK dropped), plus `market_id`.
 - `underwritings` and its children mirror `iron_bank.*`. The FK to `users` is dropped (columns kept as plain ints), `is_reference` added, and a partial unique index guarantees one reference per `zpid`.
 - Reference underwritings are read-only through the API (403 on PUT).
-- Re-running `scripts/seed.py` refreshes markets, properties and references without touching candidate attempts. `--reset` truncates every table (ids restart at 1, so the seeded markets are always 1-4) and reseeds from scratch.
+- Re-running `scripts/seed.py` refreshes markets, properties and references without touching candidate attempts. `--reset` truncates every table (ids restart at 1, so the seeded markets are always 1-4) and reseeds from scratch. `--if-empty` does nothing once properties exist; the API container runs it on every start.
 - The schema is kept as a single Alembic revision (`0001`); schema changes regenerate it rather than stacking migrations.

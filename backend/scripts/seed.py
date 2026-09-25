@@ -5,13 +5,14 @@ reference underwriting. Trainee attempts and submissions are left untouched.
 
     uv run python -m scripts.seed
     uv run python -m scripts.seed --reset   # wipe every seeded row first
+    uv run python -m scripts.seed --if-empty  # no-op once properties exist
 """
 
 import asyncio
 import sys
 from decimal import Decimal
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 
 from app.core.database import AsyncSessionLocal
 from app.models import Market, Property, Underwriting
@@ -515,10 +516,13 @@ async def _seed_markets(db) -> dict[str, Market]:
     return by_slug
 
 
-async def seed(*, reset: bool = False) -> None:
+async def seed(*, reset: bool = False, if_empty: bool = False) -> None:
     async with AsyncSessionLocal() as db:
         if reset:
             await _wipe(db)
+        elif if_empty and await db.scalar(select(func.count()).select_from(Property)):
+            print("database already seeded, skipping")
+            return
 
         markets = await _seed_markets(db)
 
@@ -567,4 +571,4 @@ async def seed(*, reset: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(seed(reset="--reset" in sys.argv))
+    asyncio.run(seed(reset="--reset" in sys.argv, if_empty="--if-empty" in sys.argv))
